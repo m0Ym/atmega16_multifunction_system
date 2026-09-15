@@ -1,0 +1,81 @@
+
+#include <mega16.h>
+#include <delay.h>
+
+#define KEY_NUM 8
+const unsigned int tone_freq[KEY_NUM] = {262, 294, 330, 349, 392, 440, 494, 523}; // CDEFGABC
+
+#define IR_SENSOR_PIN PINB.0
+#define SLEEP_TIME 180
+
+volatile unsigned int no_human_counter = 0;
+volatile bit system_on = 0;
+
+// 定时器0中断，每秒+1
+interrupt [TIM0_OVF] void timer0_ovf_isr(void) {
+    static unsigned int ms_count = 0;
+    ms_count++;
+    if (ms_count >= 1000) { // 1秒
+        ms_count = 0;
+        if (system_on) {
+            if (IR_SENSOR_PIN == 0) { // 无人
+                no_human_counter++;
+                if (no_human_counter >= SLEEP_TIME) {
+                    system_on = 0; // 关机
+                    no_human_counter = 0;
+                }
+            } else {
+                no_human_counter = 0; // 有人，计数清零
+            }
+        }
+    }
+    TCNT0 = 256 - (16000000/1024/1000); // 重新装载计数器，1ms
+}
+
+void timer0_init(void) {
+    TCCR0 = 0x05; // 1024分频
+    TCNT0 = 256 - (16000000/1024/1000); // 1ms
+    TIMSK |= (1<<TOIE0);
+}
+
+void beep(unsigned int freq, unsigned int ms) {
+    unsigned int i, delay_us_val;
+    delay_us_val = 500000 / freq;
+    for (i = 0; i < (ms * 1000) / (2 * delay_us_val); i++) {
+        PORTD.5 = 1;
+        delay_us(delay_us_val);
+        PORTD.5 = 0;
+        delay_us(delay_us_val);
+    }
+}
+
+void scan_keys_and_play(void) {
+    unsigned char i;
+    for (i = 0; i < KEY_NUM; i++) {
+        if ((PINA & (1 << i)) == 0) { // 触摸到
+            beep(tone_freq[i], 200); // 发声200ms
+            while ((PINA & (1 << i)) == 0); // 等待松开
+        }
+    }
+}
+
+void main(void) {
+    DDRA = 0x00; PORTA = 0xFF; // PA0~PA7输入，内部上拉
+    DDRB = 0x00; PORTB = 0xFF; // PB0输入，内部上拉
+    DDRD.5 = 1; PORTD.5 = 0;   // PD5输出，蜂鸣器
+
+    timer0_init();
+    #asm("sei")
+
+    while (1) {
+        if (IR_SENSOR_PIN) { // 检测到人
+            system_on = 1;
+            no_human_counter = 0;
+        }
+        if (system_on) {
+            scan_keys_and_play();
+        } else {
+            PORTD.5 = 0;
+        }
+    }
+}

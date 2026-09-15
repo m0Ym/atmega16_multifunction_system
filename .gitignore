@@ -1,0 +1,17 @@
+# Editor/OS
+.idea/
+.vscode/
+*.swp
+*.swo
+Thumbs.db
+.DS_Store
+
+# AVR compiler output
+*.o
+*.hex
+*.elf
+*.cof
+*.lst
+*.map
+*.obj
+*.bak

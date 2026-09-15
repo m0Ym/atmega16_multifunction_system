@@ -1,0 +1,356 @@
+#include <mega16.h>
+#include <delay.h>
+#include <ds18b20.h>
+#include <stdlib.h>
+
+#define F_CPU 4000000UL
+
+// 模式定义
+#define MODE_CLOCK      0
+#define MODE_COUNTDOWN  1
+#define MODE_STOPWATCH  2
+#define MODE_TEMP       3
+#define MODE_MUSIC      4
+
+// 全局变量
+volatile unsigned char hour = 12, minute = 34, second = 56;
+volatile unsigned char count_h = 0, count_m = 1, count_s = 0;
+volatile unsigned char stop_h = 0, stop_m = 0, stop_s = 0;
+volatile unsigned char current_mode = MODE_CLOCK;
+volatile bit countdown_running = 0, stopwatch_running = 0;
+volatile char edit_pos = 0;
+volatile char music_index = 0;
+volatile bit music_playing = 0;
+volatile bit temp_need_read = 0;
+float temp_cache = 0; // 缓存温度值
+
+// 共阴极段码表
+flash unsigned char seg_code[18] = {
+    0x3F, 0x06, 0x5B, 0x4F, 0x66, 0x6D, 0x7D, 0x07, 0x7F, 0x6F, // 0-9
+    0x77, 0x7C, 0x39, 0x5E, 0x79, 0x71, 0x40, 0x00  // A-F, -, 空格
+};
+
+// 音乐频率表（单位Hz，需转换为定时器周期）
+flash unsigned int ToneFreqTable[] = {
+    0, 262, 277, 294, 311, 330, 349, 370, 392, 415, 440, 466, 494, // 1~12
+    523, 554, 587, 622, 659, 698, 740, 784, 831, 880, 932, 988,    // 13~24
+    1047, 1109, 1175, 1245, 1319, 1397, 1480, 1568, 1661, 1760, 1865, 1976 // 25~36
+};
+
+// 三首歌曲
+//两只老虎
+flash int MusicTable1[] = {13,2,15,2,17,2,13,1,0,1,13,2,15,2,17,2,13,1,0,1,
+                          17,2,18,2,20,2,0,2,17,2,18,2,20,2,0,2,
+                          20,1,22,1,20,1,18,1,17,2,13,2,
+                          20,1,22,1,20,1,18,1,17,2,13,2,
+                          15,2,8,2,13,2,0,2,15,2,8,2,13,2,0,2,0xFF};
+
+//新年好
+flash int MusicTable2[] = {13,1,13,1,13,2,8,2,17,1,17,1,17,2,13,2,
+                          13,1,17,1,20,2,20,2,18,1,17,1,15,2,0,2,
+                          15,1,17,1,18,2,18,2,17,1,15,1,17,2,13,2,
+                          13,1,17,1,15,2,8,2,12,1,15,1,13,2,0,2,0xFF};
+
+//菊花台
+flash int MusicTable3[] = {0,2,17,4,17,2,15,2,17,4,0,4,17,2,20,2,17,2,15,2,17,4,0,4,
+                          13,4,13,2,15,2,17,2,20,2,17,2,0,2,15,4,15,2,13,2,15,4,0,4,
+                          17,3,20,1,17,0,22,1,20,1,0,1,22,1,20,1,20,1,17,1,20,3,8,1,0,1,
+                          17,2,15,1,15,1,20,2,17,1,15,1,0,1,15,2,15,1,13,1,15,2,0,2,
+                          17,2,17,1,15,1,17,2,0,2,17,1,20,1,17,1,15,1,17,2,0,2,
+                          13,2,13,1,15,1,17,1,20,1,17,2,0,1,15,2,15,1,13,1,15,2,0,2,
+                          17,2,20,0,17,1,22,2,20,3,0,1,22,1,20,1,20,1,17,1,20,2,0,1,
+                          0,1,17,1,15,1,17,1,20,2,17,1,15,1,0,1,0xFF};
+
+// see you again（简化版，音符编号和节奏需根据你的ToneFreqTable和节奏单位调整）
+// 例：{音符编号,时值,音符编号,时值,...,0xFF}
+flash int MusicTable4[] = 
+{20,2,27,2,25,2,20,2,0,2,25,1,27,1,29,1,27,1,25,1,27,1,20,2,27,2,25,2,20,2,0,2,25,1,27,1,29,1,27,1,25,1,27,1,20,2,27,2,25,2,20,2,0,2,25,1,27,1,29,1,27,1,25,1,27,1,20,2,27,2,25,2,20,2,0,2,13,2,17,2,20,2,22,2,0,1,20,2,0,2,0,2,13,1,15,2,15,2,13,2,17,2,0,2,0,2,17,1,20,1,22,2,24,2,22,2,20,2,17,2,15,2,15,2,13,2,15,2,15,2,17,2,13,2,0,2,0,2,0,1,13,1,17,1,20,1,22,3,20,6,0,3,13,1,15,2,15,2,13,2,17,2,0,2,0,2,15,1,17,1,20,2,22,2,25,2,27,2,29,2,27,2,25,2,22,2,25,2,27,2,27,2,27,2,25,2,0,2,0,2,20,1,22,1,25,2,27,2,27,2,27,2,25,2,0,2,0,2,0,2,0,2,25,2,24,2,22,6,20,6,25,2,24,2,22,3,24,1,22,2,20,2,17,4,17,1,20,1,25,1,27,1,29,3,27,1,29,3,27,1,29,3,27,1,29,1,32,1,29,1,27,1,25,3,22,1,25,2,27,2,25,2,0xFF};
+// DS18B20温度读取（使用PD7）
+float read_temp() {
+    return ds18b20_temperature(0);
+}
+
+// 蜂鸣器初始化（PD5）
+void buzzer_init() {
+    DDRD |= (1 << 5);   // PD5设为输出
+    TCCR1A = 0x00;      // 默认关闭PWM
+    TCCR1B = 0x00;
+}
+
+// 播放音符（无源蜂鸣器，CTC模式，OC1A输出方波）
+void play_note(unsigned char note, unsigned int duration_ms) {
+    unsigned int freq = ToneFreqTable[note];
+    unsigned int ocr = (unsigned int)(F_CPU / (2UL * freq)) - 1;
+    if (note == 0) {
+        // 休止符
+        TCCR1A = 0x00;
+        TCCR1B = 0x00;
+        PORTD &= ~(1 << 5);
+        delay_ms(duration_ms);
+        return;
+    }
+
+    // 设置CTC模式，OC1A翻转输出
+    TCCR1A = (1 << COM1A0); // Toggle OC1A on compare match
+    TCCR1B = (1 << WGM12) | (1 << CS10); // CTC, 无分频
+    OCR1A = ocr;
+    delay_ms(duration_ms);
+    // 关闭PWM
+    TCCR1A = 0x00;
+    TCCR1B = 0x00;
+    PORTD &= ~(1 << 5);
+    delay_ms(10); // 音符间隔
+}
+
+// 播放音乐
+void play_music() {
+    flash int *current_song;
+    switch (music_index) {
+        case 0: current_song = MusicTable1; break;
+        case 1: current_song = MusicTable2; break;
+        case 2: current_song = MusicTable3; break;
+        case 3: current_song = MusicTable4; break;
+        default: current_song = MusicTable1; break;
+    }
+
+    music_playing = 1;
+    while (*current_song != 0xFF && music_playing) {
+        play_note(*current_song, *(current_song + 1) * 200);
+        current_song += 2;
+        // 检查K3(PB0)是否被按下停止播放
+        if (!(PINB & (1 << 0))) {
+            delay_ms(20);
+            if (!(PINB & (1 << 0))) {
+                music_playing = 0;
+                TCCR1A = 0x00;
+                TCCR1B = 0x00;
+                while (!(PINB & (1 << 0)));
+            }
+        }
+    }
+    music_playing = 0;
+    TCCR1A = 0x00;
+    TCCR1B = 0x00;
+}
+
+// 外部中断0(K1-PD2)
+interrupt [EXT_INT0] void ext_int0_isr(void) {
+    delay_ms(20);
+    if (!(PIND & (1 << 2))) {
+        if (current_mode == MODE_COUNTDOWN) {
+            edit_pos = (edit_pos + 1) % 3;
+        }
+    }
+    GIFR |= (1 << INTF0);
+}
+
+// 外部中断1(K2-PD3)
+interrupt [EXT_INT1] void ext_int1_isr(void) {
+    delay_ms(20);
+    if (!(PIND & (1 << 3))) {
+        if (current_mode == MODE_COUNTDOWN) {
+            if (edit_pos == 0) count_h = (count_h + 1) % 24;
+            else if (edit_pos == 1) count_m = (count_m + 1) % 60;
+            else count_s = (count_s + 1) % 60;
+        }
+    }
+    GIFR |= (1 << INTF1);
+}
+
+// 更新时间
+void update_time() {
+    unsigned char i;
+    if (current_mode == MODE_CLOCK) {
+        if (++second >= 60) { 
+            second = 0; 
+            if (++minute >= 60) { 
+                minute = 0; 
+                hour = (hour + 1) % 24;
+            } 
+        }
+    }
+    else if (current_mode == MODE_COUNTDOWN && countdown_running) {
+        if (count_s > 0) count_s--;
+        else if (count_m > 0) { count_m--; count_s = 59; }
+        else if (count_h > 0) { count_h--; count_m = 59; count_s = 59; }
+        else {
+            countdown_running = 0;
+            for (i = 0; i < 3; i++) { 
+                play_note(13, 500);
+                delay_ms(500);
+            }
+            TCCR1A = 0x00;
+            TCCR1B = 0x00;
+        }
+    }
+    else if (current_mode == MODE_STOPWATCH && stopwatch_running) {
+        if (++stop_s >= 60) { 
+            stop_s = 0; 
+            if (++stop_m >= 60) { 
+                stop_m = 0; 
+                stop_h++; 
+            } 
+        }
+    }
+}
+
+// 处理K3按键(PB0) 非阻塞消抖（短按检测）
+void handle_k3() {
+    static unsigned char k3_state = 1, k3_cnt = 0;
+    if (!(PINB & (1 << 0))) { // 按下
+        if (k3_state) {
+            k3_cnt++;
+            if (k3_cnt > 2) {
+                k3_state = 0;
+                k3_cnt = 0;
+                switch (current_mode) {
+                    case MODE_COUNTDOWN:
+                        countdown_running = !countdown_running;
+                        break;
+                    case MODE_STOPWATCH:
+                        stopwatch_running = !stopwatch_running;
+                        break;
+                    case MODE_TEMP:
+                        temp_need_read = 1; // 温度模式下按K3才测温
+                        break;
+                    case MODE_MUSIC:
+                        if (music_playing) {
+                            music_playing = 0;
+                        } else {
+                            music_index = (music_index + 1) % 4; // 支持4首歌
+                            play_music();
+                        }
+                        break;
+                }
+            }
+        }
+    } else {
+        k3_state = 1;
+        k3_cnt = 0;
+    }
+}
+
+// 处理K4按键(PB1) 非阻塞消抖（短按检测）
+void handle_k4() {
+    static unsigned char k4_state = 1, k4_cnt = 0;
+    if (!(PINB & (1 << 1))) { // 按下
+        if (k4_state) {
+            k4_cnt++;
+            if (k4_cnt > 2) { // 连续2次检测到按下，确认有效
+                k4_state = 0;
+                k4_cnt = 0;
+                // 停止当前活动
+                if (current_mode == MODE_MUSIC && music_playing) {
+                    music_playing = 0;
+                    TCCR1A = 0x00;
+                    TCCR1B = 0x00;
+                }
+                // 循环切换模式 (0→1→2→3→4→0...)
+                current_mode = (current_mode + 1) % 5;
+                // 切换模式后，数码管第一位高亮显示当前模式编号，便于判断
+                PORTA = seg_code[current_mode];
+                PORTC = 0xFE; // 只点亮第一位
+                delay_ms(300); // 显示0.3秒
+                // 音乐模式自动播放（如不需要可注释掉）
+                if (current_mode == MODE_MUSIC) {
+                    play_music();
+                }
+            }
+        }
+    } else { // 松开
+        k4_state = 1;
+        k4_cnt = 0;
+    }
+}
+
+// 数码管显示（共阴极）
+void display() {
+    static unsigned char digit = 0;
+    unsigned char digits[6];
+
+    PORTA = 0x00; // 消隐
+
+    switch (current_mode) {
+        case MODE_CLOCK:
+            digits[0]=hour/10; digits[1]=hour%10; digits[2]=minute/10;
+            digits[3]=minute%10; digits[4]=second/10; digits[5]=second%10;
+            break;
+        case MODE_COUNTDOWN:
+            digits[0]=count_h/10; digits[1]=count_h%10; digits[2]=count_m/10;
+            digits[3]=count_m%10; digits[4]=count_s/10; digits[5]=count_s%10;
+            break;
+        case MODE_STOPWATCH:
+            digits[0]=stop_h/10; digits[1]=stop_h%10; digits[2]=stop_m/10;
+            digits[3]=stop_m%10; digits[4]=stop_s/10; digits[5]=stop_s%10;
+            break;
+        case MODE_TEMP:
+            if (temp_need_read) {
+                temp_cache = read_temp(); // 只在需要时测温
+                temp_need_read = 0;
+            }
+            digits[0]=16; digits[1]=16;
+            digits[2]=(int)temp_cache/10; digits[3]=(int)temp_cache%10;
+            digits[4]=(int)(temp_cache*10)%10; digits[5]=(int)(temp_cache*100)%10;
+            break;
+        case MODE_MUSIC:
+            digits[0]=10; digits[1]=12;
+            digits[2]=0; digits[3]=0;
+            digits[4]=music_index/10; digits[5]=music_index%10;
+            break;
+    }
+
+    PORTC = ~(1 << digit); // 共阴极位选
+    PORTA = seg_code[digits[digit]];
+
+    if (++digit >= 6) digit = 0;
+}
+
+// Timer0初始化(1ms中断)
+void timer0_init() {
+    TCCR0 = (1<<CS01)|(1<<CS00); // 64分频
+    TCNT0 = 194;
+    TIMSK = (1<<TOIE0);
+}
+
+interrupt [TIM0_OVF] void timer0_ovf_isr(void) {
+    static unsigned int tick = 0;
+    TCNT0 = 194;
+    display();
+    if (++tick >= 1000) {
+        tick = 0;
+        update_time();
+    }
+}
+
+void main() {
+    // 初始化IO
+    DDRA = DDRC = 0xFF; // 数码管控制
+    
+    // 按键初始化（PD2,PD3输入，PB0,PB1输入，启用内部上拉）
+    DDRD &= ~((1<<2)|(1<<3));
+    PORTD |= (1<<2)|(1<<3);
+    DDRB &= ~((1<<0)|(1<<1));
+    PORTB |= (1<<0)|(1<<1);
+
+    // 温度传感器(PD7)
+    DDRD &= ~(1<<7);
+    PORTD |= (1<<7);
+
+    // 外设初始化
+    buzzer_init();
+    timer0_init();
+
+    // 中断配置
+    MCUCR = (1<<ISC01)|(1<<ISC11); // 下降沿触发 INT0/INT1
+    GICR = (1<<INT0)|(1<<INT1);
+    #asm("sei")
+
+    while (1) {
+        handle_k3();
+        handle_k4();
+        // 不自动播放音乐，只有K3按下才播放
+        // if (current_mode == MODE_MUSIC && !music_playing) {
+        //     play_music();
+        // }
+    }
+}
