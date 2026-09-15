@@ -1,71 +1,54 @@
-# ATmega16 多功能嵌入式系统
+# ATmega16 Multi-Function Embedded System
 
-> 微机原理课程设计：基于 ATmega16 单片机的多功能系统，集成实时时钟、温度测量、
-> 音乐播放、触摸钢琴、红外遥控等功能。
+> Three independent ATmega16 (AVR) projects: RTC clock, temperature sensing, music playback,
+> touch piano, and infrared remote control. All run at 16 MHz external crystal.
 
-## 项目简介
+## Projects
 
-本仓库包含三个相互独立的 ATmega16 应用工程（AVR-GCC / CodeVision 风格 C），
-均在 16 MHz 外部晶振下运行：
+| Project | Size | Description |
+|---------|------|-------------|
+| `mega16` | 21 KB | IR remote decode + DS1302 RTC + DS18B20 temperature + 3-song music + 8-digit 7-segment display + timestamp record/playback |
+| `piano` | 2 KB | 8 touch keys (PA0–PA7) + PIR auto-sleep + PD5 buzzer, auto power-off after 180s idle |
+| `test` | 12 KB | 5 modes: clock / countdown / stopwatch / temperature / music, 6-digit display, K1–K4 buttons |
 
-| 文件 | 功能 | 说明 |
-|------|------|------|
-| `mega16` | 综合系统（21 KB） | 红外遥控解码 + DS1302 RTC 时钟 + DS18B20 测温 + 三首乐曲自动演奏 + 8 位数码管动态扫描 + 时间点记录回放 |
-| `piano` | 触摸钢琴（2 KB） | PA0~PA7 八路触摸琴键 + PB0 红外人体感应自动休眠 + PD5 蜂鸣器发声，无人 180 秒自动关机 |
-| `test` | 多模式系统（12 KB） | 五种模式切换：时钟 / 倒计时 / 秒表 / 测温 / 音乐播放，6 位数码管显示，K1~K4 按键操作 |
+## Hardware
 
-### 核心硬件
+- **MCU**: ATmega16 @ 16 MHz
+- **Display**: 8-digit common-cathode 7-segment (PORTA digit select, PORTC segment)
+- **Temperature**: DS18B20 (1-Wire, PC7/PD7)
+- **RTC**: DS1302 (PA6=IO, PA7=SCLK, PA5=RST)
+- **IR receiver**: VS1838B on PD2 (INT0), NEC protocol
+- **Buzzer**: PD5 (Timer1 CTC)
+- **Touch keys**: PA0–PA7, internal pull-up, active low
+- **PIR**: PB0 (HC-SR501)
 
-- **MCU**：ATmega16（16 MHz 晶振）
-- **显示**：8 位共阴数码管（位选 PORTA，段码 PORTC）
-- **测温**：DS18B20（1-Wire，PC7 / PD7）
-- **RTC**：DS1302（PORTA：IO=PA6, SCLK=PA7, RST=PA5）
-- **红外接收**：VS1838B 接 PD2（外部中断 0），NEC 协议解码
-- **蜂鸣器**：PD5（Timer1 CTC 模式输出方波）
-- **触摸琴键**：PA0~PA7，内部上拉，低电平有效
-- **人体感应**：PB0（HC-SR501 红外模块）
+## Music Library
 
-### 音乐库
-
-代码内置四首乐曲的音符/拍数表，通过 Timer1 CTC 模式驱动蜂鸣器播放：
+Four built-in tunes via Timer1 CTC:
 
 1. 两只老虎
 2. 新年好
 3. 菊花台
-4. See You Again（简化版）
+4. See You Again (simplified)
 
-### 技术要点
+## Key Techniques
 
-- **红外解码**：外部中断 0 下降沿触发，微秒级延时测量脉宽，NEC 协议校验（address 与 ~address 互补）
-- **DS1302 RTC**：通过软件模拟时序读写时间/日期，蔡勒公式计算星期
-- **DS18B20**：1-Wire 总线读取温度，主循环中读取并显示
-- **音乐播放**：频率表索引 → Timer1 OCR1A 重装载值 → CTC 翻转 OC1A 输出方波
-- **数码管动态扫描**：定时器中断中逐位点亮，人眼视觉暂留
-- **按键消抖**：非阻塞计数消抖，主循环轮询，不阻塞音乐播放
+- **IR decode**: INT0 falling edge, microsecond pulse measurement, NEC address/~address check
+- **DS1302 RTC**: bit-banged serial protocol, Zeller's congruence for weekday
+- **DS18B20**: 1-Wire temperature read in main loop
+- **Music**: frequency table → OCR1A reload → CTC toggle on OC1A
+- **7-segment scan**: timer interrupt digit multiplexing
+- **Key debounce**: non-blocking counter-based, no music blocking
 
-## 文件说明
+## Build & Flash
 
-```
-meage16code/
-├── mega16              # 综合系统主程序（红外+RTC+测温+音乐+数码管）
-├── piano               # 触摸钢琴工程（8键+人体感应自动休眠）
-├── test                # 多模式系统（时钟/倒计时/秒表/测温/音乐）
-├── requirement         # 引脚分配与电路说明（文本）
-├── piano_circuit.md    # 触摸钢琴详细接线表与 ASCII 接线图
-├── README.md
-└── .gitignore
-```
+1. Open source in CodeVisionAVR, Atmel Studio, or avr-gcc
+2. Chip: ATmega16, crystal 16 MHz
+3. Compile to `.hex`, flash via USBasp / JTAG
+4. Wire peripherals per `piano_circuit.md`
 
-## 编译与烧录
+## Notes
 
-1. 使用 **CodeVisionAVR** 或 **Atmel Studio / avr-gcc** 打开对应源文件；
-2. 芯片选 ATmega16，晶振 16 MHz（`piano` 工程同）；
-3. 编译生成 `.hex`，通过 USBasp / JTAG 等工具烧录；
-4. 按 `piano_circuit.md` 接线表连接外设。
-
-## 已知限制
-
-- 三个工程为独立源码文件（无扩展名），未包含 IDE 工程文件（.cproject / .uvproj 等）；
-- 数码管段码表为共阴设计，共阳需取反；
-- 音乐播放采用阻塞式延时，播放期间按键响应会延迟；
-- `mega16` 工程中红外遥控键值对应为 NEC 编码，需对应遥控器实际码值。
+- Three projects are standalone source files (no IDE project files)
+- 7-segment table is common-cathode; invert for common-anode
+- Music playback uses blocking delay; key response may lag during playback
